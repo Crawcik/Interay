@@ -9,50 +9,36 @@ namespace Interay
 	public class NetworkScript : Script
 	{
 		#region Fields
-		private protected byte _tickTime;
-		private readonly Dictionary<int, NetworkScript> _instances;
-		private int _networkID = 0;
-		private bool _isDisposing = false;
+		private ushort _networkID = 0;
+		private bool _disposed = false;
 		#endregion
 
 		#region Properties
 		/// <summary>
 		/// Determines if its spawned by the server and connected.
 		/// </summary>
-		public bool IsNetworkEntity => _networkID != 0;
-		#endregion
+		public bool IsNetworkConnected => _networkID != 0;
 
 		/// <summary>
-		/// Initializes a new instance of the <see cref="NetworkScript"/> class.
+		/// The network ID of this instance.
 		/// </summary>
-		public NetworkScript()
+		protected internal ushort NetworkID
 		{
-#if FLAX_EDITOR
-			if(!FlaxEditor.Editor.IsPlayMode)
-				return;
-#endif
-			if(this is NetworkManager)
-			{
-				_instances = new Dictionary<int, NetworkScript>();
-				_isDisposing = this != NetworkManager.Singleton;
-			}
-			Scripting.Update += Validate;
+			get => _networkID;
+			set => _networkID = value;
 		}
+		#endregion
 
 		#region Methods
-
 		/// <inheritdoc />
-		public override void OnAwake()
+		public override void OnDestroy()
 		{
-			
+			if(!_disposed && _networkID != 0)
+			{
+				NetworkManager.Singleton.UnregisterNetworkScript(_networkID);
+				_disposed = true;
+			}
 		}
-
-		/// <inheritdoc />
-		public override void OnDestroy() 
-		{
-			NetworkManager.Singleton._instances.Remove(_networkID);
-		}
-
 		/// <summary>
 		/// Called when hosts starts the server.
 		/// </summary>
@@ -78,27 +64,13 @@ namespace Interay
 		/// </summary>
 		public virtual void OnClientDisconnect(int connection) { }
 
-
-		private protected void Dispose()
+		/// <summary>
+		/// Destroys this instance.
+		/// </summary>
+		protected internal virtual void Dispose()
 		{
-			_isDisposing = true;
-			Scripting.Update += Validate;
-		}
-
-		private void Validate()
-		{
-			Scripting.Update -= Validate;
-			if(!_isDisposing)
-			{
-				if(this == NetworkManager.Singleton)
-					NetworkManager.Singleton._instances.Add(0, this);
-				else if (_networkID != 0)
-					NetworkManager.Singleton._instances.Add(_networkID, this);
-				return;	
-			}
-			if(this is NetworkManager)
-					Debug.LogWarning("Multiple instances of \"NetworkManager\" script found! Destroying additional instances.");
-			Destroy(this);
+			if(!_disposed)
+				Destroy(this);
 		}
 		#endregion
 	}
