@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Net;
 using System.Runtime.InteropServices;
 
 namespace Interay.Transport
@@ -8,7 +7,7 @@ namespace Interay.Transport
 	/// <summary>
 	/// Enet transport layer.
 	/// </summary>
-	public sealed class Enet: NetworkTransport
+	public sealed class Enet : NetworkTransport
 	{
 		private const PacketFlags DefaultSendFlags = PacketFlags.NoAllocate | PacketFlags.Unsequenced;
 
@@ -34,35 +33,54 @@ namespace Interay.Transport
 		{
 			if (IsInitialized)
 			{
-				NetworkManager.LogInfo("ENet driver is already initialized!");
+				LogInfo("ENet driver is already initialized!");
 				return IsInitialized;
 			}
-			if (Native.Initialize() == 0)
+			/*var callbacks = new ENetCallbacks
+			{
+				malloc = Marshal.AllocHGlobal,
+				free = Marshal.FreeHGlobal,
+				no_memory = () => throw new OutOfMemoryException("ENet: Out of memory!")
+			};
+			if (Native.Initialize(Native.Version, ref callbacks) < 0)
    			{
-				NetworkManager.LogInfo("Failed to initialize ENet driver!");
+				LogInfo("Failed to initialize ENet driver!");
+				return false;
+			}*/
+			if (Native.Initialize() < 0)
+			{
+				LogInfo("Failed to initialize ENet driver!");
 				return false;
 			}
-			NetworkManager.LogFatal("Failed to initialize ENet driver!");
 			_isInitialized = true;
 			return true;
 		}
 
 		/// <inheritdoc />
-		public override bool Start(HostType hostType, IPAddress address, ushort port)
+		public override bool Start(HostType hostType, string address, ushort port)
 		{
 			if (_isRunning || !_isInitialized)
 				return false;
 			var nativeAddress = new ENetAddress() { Port = port };
 			var isServer = (hostType & HostType.Server) == HostType.Server;
-			if (isServer && Native.SetHost(ref nativeAddress, address.ToString()) < 0)
+			if (!isServer && Native.SetHost(ref nativeAddress, address) < 0)
 			{
-				NetworkManager.LogWarning("Setting host address on transport layer failed!");
+				LogWarning("Setting host address on transport layer failed!");
 				return false;
 			}
-			_host = isServer ? Native.CreateHost(ref nativeAddress, (int)Settings.MaxConnections, 1, 0, 0) : Native.CreateHost(IntPtr.Zero, 1, 1, 0, 0);
+			_host = isServer
+				? Native.CreateHost(ref nativeAddress, (IntPtr)Convert.ToInt32(Settings.MaxConnections), (IntPtr)1, 0, 0)
+				: Native.CreateHost(IntPtr.Zero, (IntPtr)1, (IntPtr)1, 0, 0);
 			if (_host == IntPtr.Zero)
+			{
+				LogWarning("Creating host on transport layer failed!");
 				return false;
-			if(!isServer)
+			}
+			if(isServer)
+			{
+				_peers = new Dictionary<uint, IntPtr>();
+			}
+			else
 			{
 				_clientPeer = Native.Connect(_host, ref nativeAddress, 1, 0);
 				if (_clientPeer == IntPtr.Zero)
@@ -100,7 +118,7 @@ namespace Interay.Transport
 			{
 				Native.DisconnectNow(_peers[intID], 0);
 				_peers.Remove(intID);
-				NetworkManager.LogInfo($"Disconnected client with id {id} from transport.");
+				LogInfo($"Disconnected client with id {id} from transport.");
 			}
 		}
 
@@ -124,7 +142,7 @@ namespace Interay.Transport
 				result = Native.Service(_host, out var networkEvent, 0);
 				if(result < 0)
 				{
-					NetworkManager.LogWarning("ENet fetching network events failed!");
+					LogInfo("ENet fetching network events failed!");
 					return;
 				}
 				else if (result == 0)
@@ -138,18 +156,18 @@ namespace Interay.Transport
 							break;
 						_peers.Add(peerId, networkEvent.Peer);
 						InvokeOnClientConnected(peerId);
-						NetworkManager.LogInfo($"Client connected! Peer ID: {peerId}");
+						LogInfo($"Client connected! Peer ID: {peerId}");
 						break;
 					case EventType.Disconnect:
 					case EventType.Timeout:
 						if (_clientPeer != IntPtr.Zero)
 							break;
-						NetworkManager.LogInfo($"Client disconnected! Peer ID: {peerId}");
+						LogInfo($"Client disconnected! Peer ID: {peerId}");
 						_peers.Remove(peerId);
 						InvokeOnClientDisconnected(peerId);
 						break;
 					case EventType.Receive:
-						using (var packet = new NetworkPacket(Native.GetPacketData(networkEvent.Packet), (int)Native.GetPacketLength(networkEvent.Packet)))
+						using (var packet = new NetworkPacket(Native.GetPacketData(networkEvent.Packet), (int)Native.GetPacketSize(networkEvent.Packet)))
 						{
 							try
 							{
@@ -173,11 +191,11 @@ namespace Interay.Transport
 				return false;
 			if(_clientPeer == IntPtr.Zero)
 			{
-				Native.Broadcast(_host, 1, enetPacket);
+				Native.Broadcast(_host, 0, enetPacket);
 			}
 			else
 			{
-				error = Native.SendPeer(_clientPeer, 0, packet.GetPointer()) < 0;
+				error = Native.Send(_clientPeer, 0, packet.GetPointer()) < 0;
 			}
 			Native.DestroyPacket(enetPacket);
 			return !error;
@@ -190,13 +208,13 @@ namespace Interay.Transport
 				return false;
 			if(!_peers.ContainsKey((uint)id))
 			{
-				NetworkManager.LogWarning($"Client with id {id} is not connected!");
+				LogWarning($"Client with id {id} is not connected!");
 				return false;
 			}
 			var enetPacket = Native.CreatePacket(packet.GetPointer(), packet.Size, DefaultSendFlags);
 			if(enetPacket == IntPtr.Zero)
 				return false;
-			var error = Native.SendPeer(_peers[(uint)id], 1, enetPacket) < 0;
+			var error = Native.Send(_peers[(uint)id], 0, enetPacket) < 0;
 			Native.DestroyPacket(enetPacket);
 			return !error;
 		}
@@ -210,7 +228,7 @@ namespace Interay.Transport
 				if(newSettings.MaxConnections != Settings.MaxConnections 
 				|| newSettings.MessageMaxSize != Settings.MessageMaxSize)
 				{
-					NetworkManager.LogWarning("In ENet, only \"TickRate\" and \"MaxNetworkScripts\" can be changed!");
+					LogWarning("In ENet, only \"TickRate\" and \"MaxNetworkScripts\" can be changed!");
 					valid = false;
 				}
 				return;
@@ -220,34 +238,41 @@ namespace Interay.Transport
 
 		#endregion
 
-		#region Native
-		private enum PacketFlags {
+		#region Enums
+		internal enum PacketFlags 
+		{
 			None = 0,
-			Reliable = 1 << 0,
-			Unsequenced = 1 << 1,
-			NoAllocate = 1 << 2,
-			UnreliableFragmented = 1 << 3,
-			Instant = 1 << 4,
-			Unthrottled = 1 << 5,
-			Sent =  1 << 8
+			Reliable = 1,
+			Unsequenced = 2,
+			NoAllocate = 4,
+			UnreliableFragmented = 8,
+			Instant = 16,
+			Unthrottled = 32,
+			Sent =  256
 		}
 
-		private enum EventType {
+		internal enum EventType 
+		{
 			None = 0,
 			Connect = 1,
 			Disconnect = 2,
 			Receive = 3,
 			Timeout = 4
 		}
+		#endregion
 
-		[StructLayout(LayoutKind.Explicit, Size = 18)]
-		private struct ENetAddress {
-			[FieldOffset(16)]
+		#region Structs
+		[StructLayout(LayoutKind.Sequential)]
+		internal struct ENetAddress 
+		{
+			[MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
+			public byte[] IP;
 			public ushort Port;
 		}
 
 		[StructLayout(LayoutKind.Sequential)]
-		private struct ENetEvent {
+		internal struct ENetEvent 
+		{
 			public EventType Type;
 			public IntPtr Peer;
 			public byte ChannelID;
@@ -255,17 +280,39 @@ namespace Interay.Transport
 			public IntPtr Packet;
 		}
 
-		private static class Native
+		[StructLayout(LayoutKind.Sequential)]
+		internal struct ENetCallbacks 
 		{
+			public AllocCallback malloc;
+			public FreeCallback free;
+			public NoMemoryCallback no_memory;
+		}
+		#endregion
+
+		#region Delegates
+		internal delegate IntPtr AllocCallback(IntPtr size);
+		internal delegate void FreeCallback(IntPtr memory);
+		internal delegate void NoMemoryCallback();
+		#endregion
+
+		internal static class Native
+		{
+			#region Constants
 			public const int MaximumPeers = 0xFFF;
 			public const int MaximumPacketSize  = 32 * 1024 * 1024;
-			private const string DllName = "__Internal";
+			public const uint Version = (2<<16)|(4<<8)|(8);
+			private const string DllName = "enet";
 			private const CallingConvention Convention = CallingConvention.Cdecl;
+			#endregion
 
-			// int enet_initialize(void);
-
+			#region Native Methods
+			// int enet_initialize()
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_initialize")]
 			internal static extern int Initialize();
+
+			// int enet_initialize_with_callbacks(ENetVersion version, const ENetCallbacks * inits)
+			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_initialize_with_callbacks")]
+			internal static extern int Initialize(uint version, ref ENetCallbacks inits);
 
 			// void enet_deinitialize(void);
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_deinitialize")]
@@ -273,11 +320,11 @@ namespace Interay.Transport
 
 			// ENetHost * enet_host_create(const ENetAddress *, size_t, size_t, enet_uint32, enet_uint32);
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_host_create")]
-			internal static extern IntPtr CreateHost(ref ENetAddress address, int peerLimit, int channelLimit, uint incomingBandwidth, uint outgoingBandwidth);
+			internal static extern IntPtr CreateHost(ref ENetAddress address, IntPtr peerLimit, IntPtr channelLimit, uint incomingBandwidth, uint outgoingBandwidth);
 
 			// ENetHost * enet_host_create(const ENetAddress *, size_t, size_t, enet_uint32, enet_uint32);
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_host_create")]
-			internal static extern IntPtr CreateHost(IntPtr address, int peerLimit, int channelLimit, uint incomingBandwidth, uint outgoingBandwidth);
+			internal static extern IntPtr CreateHost(IntPtr address, IntPtr peerLimit, IntPtr channelLimit, uint incomingBandwidth, uint outgoingBandwidth);
 			
 			// void enet_host_destroy(ENetHost *);
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_host_destroy")]
@@ -305,7 +352,7 @@ namespace Interay.Transport
 
 			// int enet_peer_send(ENetPeer *, enet_uint8, ENetPacket *);
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_peer_send")]
-			internal static extern int SendPeer(IntPtr peer, byte channelID, IntPtr packet);
+			internal static extern int Send(IntPtr peer, byte channelID, IntPtr packet);
 
 			// void enet_host_broadcast(ENetHost *host, enet_uint8 channelID, ENetPacket *packet)
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_host_broadcast")]
@@ -329,14 +376,12 @@ namespace Interay.Transport
 
 			// enet_uint32 enet_packet_get_length(ENetPacket *)
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_packet_get_length")]
-			internal static extern uint GetPacketLength(IntPtr packet);
+			internal static extern uint GetPacketSize(IntPtr packet);
 
 			// int enet_address_set_host(ENetAddress * address, const char * hostName);
-			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_address_set_host")]
+			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_address_set_host_old")]
 			internal static extern int SetHost(ref ENetAddress address, string hostName);
-
-
+			#endregion
 		}
-		#endregion
 	}
 }

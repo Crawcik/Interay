@@ -1,3 +1,4 @@
+using System.IO;
 using Flax.Build;
 using Flax.Build.NativeCpp;
 
@@ -17,7 +18,17 @@ public class Interay : GameModule
 	public override void Setup(BuildOptions options)
 	{
 		base.Setup(options);
-
+		string path = Path.Combine(FolderPath, "..", "..", "Content", "Enet");
+		switch (options.Platform.Target)
+		{
+			case TargetPlatform.Windows:
+				options.DependencyFiles.Add(Path.Combine(path, "enet.dll"));
+				break;
+			case TargetPlatform.Linux:
+			case TargetPlatform.Mac:
+				options.DependencyFiles.Add(Path.Combine(path, "libenet.so"));
+				break;
+		}
 		options.ScriptingAPI.IgnoreMissingDocumentationWarnings = false;
 
 		// Here you can modify the build options for your game module
