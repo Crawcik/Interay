@@ -1,4 +1,3 @@
-using System.Net;
 using FlaxEngine;
 #if FLAX_EDITOR
 using FlaxEditor.Scripting;
@@ -12,7 +11,7 @@ namespace Interay
 	/// <summary>
 	/// The <see cref="NetworkTransport"/> class is used to transfer data between players and server.
 	/// </summary>
-	public abstract class NetworkTransport
+	public abstract class NetworkTransport : System.IDisposable
 	{
 		private NetworkSettings _settings;
 
@@ -45,6 +44,11 @@ namespace Interay
 					_settings = value;
 			}
 		}
+
+		internal NetworkLogDelegate LogInfo => NetworkManager.LogInfo;
+		internal NetworkLogDelegate LogWarning => NetworkManager.LogWarning;
+		internal NetworkLogDelegate LogError => NetworkManager.LogError;
+		internal NetworkLogDelegate LogFatal => NetworkManager.LogFatal;
 		#endregion
 
 		#region Events
@@ -71,7 +75,7 @@ namespace Interay
 		/// <param name="hostType">The type of host.</param>
 		/// <param name="address">Designated IP address of server</param>
 		/// <param name="port">Designated port of server</param>
-		public abstract bool Start(HostType hostType, IPAddress address, ushort port);
+		public abstract bool Start(HostType hostType, string address, ushort port);
 
 		/// <summary>
 		/// Stops server/client.
@@ -129,6 +133,7 @@ namespace Interay
 		#endregion
 	}
 
+	#region Editor
 	#if FLAX_EDITOR
 	/// <summary>
 	/// Implementation of the inspector used to edit reference to the <see cref="NetworkTransport"/> inheritors.
@@ -165,4 +170,5 @@ namespace Interay
 		}
 	}
 	#endif
+	#endregion
 }

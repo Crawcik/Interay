@@ -8,6 +8,8 @@ using FlaxEditor.CustomEditors;
 
 namespace Interay
 {
+	internal delegate void NetworkLogDelegate(object message);
+
 	/// <summary>
 	/// The <see cref="NetworkManager"/> manages network aspect, such as connecting, managing network data, etc.
 	/// </summary>
@@ -35,6 +37,10 @@ namespace Interay
 		[EditorOrder(-990), Tooltip("Determines how much details will be logged.")]
 		public LogType LogLevel = LogType.Error;
 
+		internal static readonly NetworkLogDelegate LogInfo = (message) => LogFilter(LogType.Info, message);
+		internal static readonly NetworkLogDelegate LogWarning = (message) => LogFilter(LogType.Warning, message);
+		internal static readonly NetworkLogDelegate LogError = (message) => LogFilter(LogType.Error, message);
+		internal static readonly NetworkLogDelegate LogFatal = (message) => LogFilter(LogType.Fatal, message);
 		private NetworkSettings _settings = NetworkSettings.Default;
 		private NetworkTransport _transport;
 		private NetworkScript[] _instances;
@@ -58,8 +64,25 @@ namespace Interay
 			get => _transport;
 			set 
 			{
-				if(_transport?.IsRunning ?? false)
+#if FLAX_EDITOR
+				if (!FlaxEditor.Editor.IsPlayMode)
+				{
 					_transport = value;
+					return;
+				}
+#endif
+				
+				if(_transport?.IsRunning ?? false)
+					return;
+				if (_transport == value)
+					return;
+				if(!value.Initialize())
+				{
+					Debug.LogError("Failed to initialize network transport layer.");
+					return;
+				}
+				_transport?.Dispose();
+				_transport = value;
 			}
 		}
 
@@ -89,14 +112,6 @@ namespace Interay
 		public bool IsClient { get; private set; }
 		#endregion
 
-		#region Delegates
-		internal delegate void NetworkLogDelegate(object message);
-		internal static NetworkLogDelegate LogInfo;
-		internal static NetworkLogDelegate LogWarning;
-		internal static NetworkLogDelegate LogError;
-		internal static NetworkLogDelegate LogFatal;
-		#endregion
-
 		/// <summary>
 		/// Initializes a new instance of the <see cref="NetworkManager"/> class.
 		/// </summary>
@@ -108,11 +123,10 @@ namespace Interay
 #endif
 			if (Singleton is null)
 			{
+				#if FLAX_EDITOR
+				FlaxEditor.Editor.Instance.StateMachine.PlayingState.SceneRestored += Dispose;
+				#endif
 				Singleton = this;
-				LogInfo = message => Singleton.LogFilter(LogType.Info, message);
-				LogWarning = message => Singleton.LogFilter(LogType.Warning, message);
-				LogError = message => Singleton.LogFilter(LogType.Error, message);
-				LogFatal = message => Singleton.LogFilter(LogType.Fatal, message);
 				return;
 			}
 			LogWarning("Multiple instances of \"NetworkManager\" script found! Destroying additional instances.");
@@ -130,29 +144,61 @@ namespace Interay
 			var isServer = (hostType & HostType.Server) == HostType.Server;
 			var isClient = (hostType & HostType.Client) == HostType.Client;
 
-			if (Transport is null)
+			if (_transport is null)
 			{
 				LogError("No transport layer is set.");
 				return false;
 			}
-			if(isServer && !IPAddress.TryParse(Hostname, out address))
+			if (!_transport.IsInitialized)
 			{
-				LogError("Invalid hostname.");
+				LogError("Transport layer is not initialized or is disposed.");
 				return false;
+			}
+			if (!isServer)
+			{
+				if (Hostname.Contains("localhost"))
+					address = IPAddress.Loopback;
+				else if (!IPAddress.TryParse(Hostname, out address))
+				{
+					LogError("Invalid hostname.");
+					return false;
+				}
 			}
 			IsServer = isServer;
 			IsClient = isClient;
-			Transport.Settings = Settings;
-			_instances = new NetworkScript[Math.Min(InitialArrayCapacity, Settings.MaxNetworkScripts)];
+			_transport.Settings = Settings;
+			_transport.OnPacketReceived += OnPacketReceived;
+			_transport.OnClientConnected += OnClientConnected;
+			_instances = new NetworkScript[Math.Min(InitialArrayCapacity, Settings.MaxNetworkScripts + 1)];
+			_emptyInstances = new Stack<uint>();
+			_instances[0] = this;
 			_tickTimeNow = 0;
-			return Transport.Start(hostType, address, Port);
+			_biggestNetworkID = 0;
+			var ret = _transport.Start(hostType, address.ToString(), Port);
+			if (ret)
+				Scripting.FixedUpdate += FixedUpdate;
+			for (int i = 0; i <= _biggestNetworkID; i++)
+			{
+				var script = _instances[i];
+				if(script is null)
+					continue;
+				try
+				{
+					script.OnStartHost();
+				}
+				catch (Exception exception)
+				{
+					Debug.LogException(exception, script);
+				}
+			}
+			return ret;
 		}
 
 		/// <summary>
 		/// Starts server.
 		/// </summary>
 		/// <returns>True if server started successfully.</returns>
-		public bool StartServer() => Start( HostType.Server);
+		public bool StartServer() => Start(HostType.Server);
 
 		/// <summary>
 		/// Starts server.
@@ -166,20 +212,52 @@ namespace Interay
 		/// <returns>True if host started successfully.</returns>
 		public bool StartHost() => Start(HostType.Host);
 
+		/// <summary>
+		/// Stops network.
+		/// </summary>
+		public void Stop() 
+		{
+			if (!IsRunning)
+				return;
+				
+			for (int i = 0; i <= _biggestNetworkID; i++)
+			{
+				var script = _instances[i];
+				if(script is null)
+					continue;
+				try
+				{
+					script.OnStopHost();
+				}
+				catch (Exception exception)
+				{
+					Debug.LogException(exception, script);
+				}
+			}
+			_transport.OnPacketReceived -= OnPacketReceived;
+			_transport.OnClientConnected -= OnClientConnected;
+			_transport.Stop();
+			IsServer = false;
+			IsClient = false;
+			_biggestNetworkID = 0;
+			_instances = null;
+			_emptyInstances = null;
+		}
+
 		internal bool RegisterNetworkScript(NetworkScript instance, uint id = 0)
 		{
 			if (IsServer)
 				id = _biggestNetworkID + 1;
 			if (id >= _instances.Length)
 			{
-				var maxNetworkScripts = _transport.Settings.MaxNetworkScripts;
+				var maxNetworkScripts = _transport.Settings.MaxNetworkScripts + 1;
 				if (_emptyInstances?.Count > 0)
 				{
 					id = _emptyInstances.Pop();
 				}
 				else if (id < maxNetworkScripts)
 				{
-					NetworkScript[] newItems = new NetworkScript[Math.Min(_instances.Length + InitialArrayCapacity, maxNetworkScripts)];
+					var newItems = new NetworkScript[Math.Min(_instances.Length + InitialArrayCapacity, maxNetworkScripts)];
 					Array.Copy(_instances, 0, newItems, 0, _instances.Length);
 					_instances = newItems;
 				}
@@ -191,13 +269,15 @@ namespace Interay
 			}
 			if(IsServer)
 			{
-				_biggestNetworkID++;
 				if(_instances[id] is object)
 				{
 					LogError("Network script with id " + id + " already exists.");
 					return false;
 				}
+				_biggestNetworkID++;
 			}
+			else if(IsClient && !IsServer && _biggestNetworkID < id)
+				_biggestNetworkID = id;
 			_instances[id] = instance;
 			return true;
 		}
@@ -211,9 +291,9 @@ namespace Interay
 			}
 		}
 
-		private void LogFilter(LogType type, object message)
+		private static void LogFilter(LogType type, object message)
 		{
-			if(type >= LogLevel)
+			if(type >= Singleton?.LogLevel)
 				Debug.Logger.Log(type, "Network Manager", message);
 		}
 		#endregion
@@ -227,12 +307,47 @@ namespace Interay
 			{
 				Profiler.BeginEvent("Network.Tick");
 				this.Transport.Tick(this._tickTimeNow);
-				foreach (NetworkScript script in _instances)
-					script.OnTick();
+				for (int i = 0; i <= _biggestNetworkID; i++)
+				{
+					var script = _instances[i];
+					if(script is object)
+						script.OnTick();
+				}
 				Profiler.EndEvent();
 				_tickTimeNow -= (1f / Settings.TickRate);
 			}
 			_tickTimeNow += Time.DeltaTime;
+		}
+
+		private void OnPacketReceived(ulong sender, NetworkPacket packet)
+		{
+			Debug.Log(packet.ReadByte()); // Packet type
+			Debug.Log(packet.ReadByte()); // Packet type
+		}
+
+		private void OnClientConnected(ulong clientID)
+		{
+			if (IsServer)
+			{
+				var bytes = new byte[] { 64, 128 };
+				using (var packet = new NetworkPacket(ref bytes))
+				{
+					this._transport.SendTo(clientID, packet);
+				}
+			}
+		}
+
+		/// <inheritdoc />
+		protected internal override void Dispose()
+		{
+			Singleton = null;
+			if (IsRunning)
+				Stop();
+			if (_transport?.IsInitialized ?? false)
+				_transport.Dispose();
+			#if FLAX_EDITOR
+			FlaxEditor.Editor.Instance.StateMachine.PlayingState.SceneRestored -= Dispose;
+			#endif
 		}
 		#endregion
 	}
