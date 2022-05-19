@@ -139,7 +139,7 @@ namespace Interay
 	/// Implementation of the inspector used to edit reference to the <see cref="NetworkTransport"/> inheritors.
 	/// </summary>
 	[CustomEditor(typeof(NetworkTransport))]
-	public sealed class NetworkTransportRefEditor : CustomEditor
+	internal sealed class NetworkTransportRefEditor : CustomEditor
 	{
 		private CustomElement<TypePickerControl> _element;
 

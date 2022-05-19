@@ -2,8 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using FlaxEngine;
+using FlaxEngine.GUI;
 #if FLAX_EDITOR
+using FlaxEditor;
 using FlaxEditor.CustomEditors;
+using FlaxEditor.CustomEditors.Editors;
+using FlaxEditor.CustomEditors.Elements;
 #endif
 
 namespace Interay
@@ -112,6 +116,17 @@ namespace Interay
 		public bool IsClient { get; private set; }
 		#endregion
 
+		#region Events
+		/// <summary>
+		/// Occurs when network is started.
+		/// </summary>
+		public event Action<HostType> StartHostEvent;
+
+		/// <summary>
+		/// Occurs when network is stopped.
+		/// </summary>
+		public event Action StopHostEvent;
+		#endregion
 		/// <summary>
 		/// Initializes a new instance of the <see cref="NetworkManager"/> class.
 		/// </summary>
@@ -174,9 +189,11 @@ namespace Interay
 			_instances[0] = this;
 			_tickTimeNow = 0;
 			_biggestNetworkID = 0;
-			var ret = _transport.Start(hostType, address.ToString(), Port);
-			if (ret)
-				Scripting.FixedUpdate += FixedUpdate;
+			if (!_transport.Start(hostType, address.ToString(), Port))
+				return false;
+			LogInfo($"Started {(isServer ? "server" : "client")} on {address}:{Port}");
+			Scripting.FixedUpdate += FixedUpdate;
+			StartHostEvent?.Invoke(hostType);
 			for (int i = 0; i <= _biggestNetworkID; i++)
 			{
 				var script = _instances[i];
@@ -191,7 +208,7 @@ namespace Interay
 					Debug.LogException(exception, script);
 				}
 			}
-			return ret;
+			return true;
 		}
 
 		/// <summary>
@@ -219,7 +236,8 @@ namespace Interay
 		{
 			if (!IsRunning)
 				return;
-				
+			
+			StopHostEvent?.Invoke();
 			for (int i = 0; i <= _biggestNetworkID; i++)
 			{
 				var script = _instances[i];
@@ -310,8 +328,16 @@ namespace Interay
 				for (int i = 0; i <= _biggestNetworkID; i++)
 				{
 					var script = _instances[i];
-					if(script is object)
+					if(script is null)
+						continue;
+					try
+					{
 						script.OnTick();
+					}
+					catch (Exception exception)
+					{
+						Debug.LogException(exception, script);
+					}
 				}
 				Profiler.EndEvent();
 				_tickTimeNow -= (1f / Settings.TickRate);
@@ -352,7 +378,64 @@ namespace Interay
 		#endregion
 	}
 
-	// TODO: NetorkManagerEditor button: Host/Connect/Server only
+	#region Editor
+	#if FLAX_EDITOR
+	[CustomEditor(typeof(NetworkManager))]
+	internal sealed class NetworkManagerEditor : GenericEditor
+	{
+		private CustomElementsContainer<HorizontalPanel> _container;
+		private NetworkManager _manager;	
+		public override void Initialize(LayoutElementsContainer layout)
+		{
+			base.Initialize(layout);
+			layout.Space(20f);
+			_container = layout.CustomContainer<HorizontalPanel>();
+			_container.Control.Height = 30f;
+			_container.Control.AnchorPreset = AnchorPresets.BottomCenter;
+			_container.Control.LocalX = 0f;
+			_container.CustomControl.Spacing = 10f;
+			if (!Editor.IsPlayMode)
+				return;
+
+			_manager = (NetworkManager)this.Values[0];
+			_manager.StartHostEvent += OnStartHost;
+			_manager.StopHostEvent += OnStopHost;
+			OnStopHost();
+		}
+
+		private void OnStartHost(HostType type)
+		{
+			_container.CustomControl.DisposeChildren();
+			SetButton(_container.Button(type == HostType.Client ? "Disconnect" : "Stop").Button, 0, false);
+		}
+
+		private void OnStopHost()
+		{
+			_container.CustomControl.DisposeChildren();
+			SetButton(_container.Button("Host").Button, HostType.Host, true);
+			SetButton(_container.Button("Server only").Button, HostType.Server, true);
+			SetButton(_container.Button("Connect").Button, HostType.Client, true);
+		}
+
+		protected override void Deinitialize()
+		{
+			if(_manager is object)
+			{
+				_manager.StartHostEvent -= OnStartHost;
+				_manager.StopHostEvent -= OnStopHost;
+			}
+			_container.CustomControl.DisposeChildren();
+			base.Deinitialize();
+		}
+
+		private void SetButton(Button button, HostType hostType, bool start) {
+			button.Width = 70f;
+			button.Height = 30f;
+			button.Clicked += () => { if (start) _manager.Start(hostType); else _manager.Stop(); };
+		}
+	}
+	#endif
+	#endregion
 
 	/// <summary>
 	/// Host type of the network
