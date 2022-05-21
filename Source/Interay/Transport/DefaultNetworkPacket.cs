@@ -5,20 +5,22 @@ using System.Runtime.InteropServices;
 namespace Interay
 {
 	/// <summary>
-	/// The <see cref="NetworkPacket"/> class is used to serialize and deserialize messages.
+	/// The <see cref="DefaultNetworkPacket"/> is default serializing class with internal allocation methods.
 	/// </summary>
-	public unsafe class NetworkPacket : IDisposable
+	public unsafe class DefaultNetworkPacket : INetworkPacket
 	{
 		#region Fields
-		/// <summary>
-		/// The size of the packet.
-		/// </summary>
-		public readonly int Size;
-		private readonly GCHandle _handle;
+		internal readonly IntPtr Pointer;
 		private readonly bool _allocated = false;
 		private byte* _buffer;
 		private int _position = 0;
 		private bool _disposed = false;
+		private int _size;
+		#endregion
+
+		#region Properties
+		/// <inheritdoc/>
+		public int Size => _size;
 		#endregion
 
 		#region Constructors
@@ -26,10 +28,11 @@ namespace Interay
 		/// When using this constructor, remember to call <see cref="Dispose"/> method or use using().
 		/// </summary>
 		/// <param name="bufferSize">The size of the buffer.</param>
-		public NetworkPacket(int bufferSize)
+		public DefaultNetworkPacket(int bufferSize)
 		{
-			_buffer = (byte*)Marshal.AllocHGlobal(bufferSize);
-			Size = bufferSize;
+			Pointer = Marshal.AllocHGlobal(bufferSize);
+			_size = bufferSize;
+			_buffer = (byte*)Pointer;
 			_allocated = true;
 		}
 
@@ -38,10 +41,11 @@ namespace Interay
 		/// </summary>
 		/// <param name="buffer">Pointer to the buffer.</param>
 		/// <param name="bufferSize">The size of the buffer.</param>
-		public NetworkPacket(byte* buffer, int bufferSize)
+		public DefaultNetworkPacket(byte* buffer, int bufferSize)
 		{
+			Pointer = (IntPtr)buffer;
+			_size = bufferSize;
 			_buffer = buffer;
-			Size = bufferSize;
 		}
 
 		/// <summary>
@@ -49,41 +53,27 @@ namespace Interay
 		/// </summary>
 		/// <param name="buffer">Pointer to the buffer.</param>
 		/// <param name="bufferSize">The size of the buffer.</param>
-		public NetworkPacket(IntPtr buffer, int bufferSize)
+		public DefaultNetworkPacket(IntPtr buffer, int bufferSize)
 		{
+			Pointer = buffer;
+			_size = bufferSize;
 			_buffer = (byte*)buffer;
-			Size = bufferSize;
-		}
-
-		/// <summary>
-		/// When using this constructor, remember to call <see cref="Dispose"/> method or use using().
-		/// </summary>
-		/// <param name="buffer">Packet buffer.</param>
-		public NetworkPacket(ref byte[] buffer)
-		{
-			if(buffer is null)
-				throw new ArgumentNullException(nameof(buffer));
-			_handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
-			_buffer = (byte*)_handle.AddrOfPinnedObject();
-			Size = buffer.Length;
 		}
 
 		/// <summary>
 		/// Destructor.
 		/// </summary>
-		~NetworkPacket()
+		~DefaultNetworkPacket()
 		{
 			this.Dispose();
 		}
 		#endregion
 
 		#region Methods
-		/// <summary>
-		/// Reads a value from the buffer.
-		/// </summary>
+		/// <inheritdoc/>
 		public byte ReadByte() 
 		{
-			if (_position++ >= Size)
+			if (_position++ >= _size)
 			{
 				_position--;
 				throw new IndexOutOfRangeException();
@@ -91,13 +81,11 @@ namespace Interay
 			return *_buffer++;
 		}
 
-		/// <summary>
-		/// Reads a bytes from the buffer.
-		/// </summary>
+		/// <inheritdoc/>
 		public byte[] ReadBytes(int length) 
 		{
 			var designated = _position + length;
-			if (designated > Size)
+			if (designated > _size)
 				throw new IndexOutOfRangeException();
 			_position = designated;
 			var bytes = new byte[length];
@@ -107,14 +95,11 @@ namespace Interay
 			return bytes;
 		}
 
-		/// <summary>
-		/// Reads a struct type from the buffer.
-		/// </summary>
-		/// <remarks>Unsafe method!!!</remarks>
+		/// <inheritdoc/>
 		public T ReadStruct<T>() where T : struct
 		{
 			var designated = _position + Marshal.SizeOf<T>();
-			if (designated > Size)
+			if (designated > _size)
 				throw new IndexOutOfRangeException();
 			_position = designated;
 			var ret = Marshal.PtrToStructure<T>((IntPtr)_buffer);
@@ -122,12 +107,10 @@ namespace Interay
 			return ret;
 		}
 
-		/// <summary>
-		/// Writes a byte to the buffer.
-		/// </summary>
+		/// <inheritdoc/>
 		public void WriteByte(byte value)
 		{
-			if (_position++ >= Size)
+			if (_position++ >= _size)
 			{
 				_position--;
 				throw new IndexOutOfRangeException();
@@ -135,13 +118,11 @@ namespace Interay
 			*_buffer++ = value;
 		}
 
-		/// <summary>
-		/// Writes a bytes to the buffer.
-		/// </summary>
+		/// <inheritdoc/>
 		public void WriteBytes(ref byte[] value)
 		{
 			var designated = _position + value.Length;
-			if (designated > Size)
+			if (designated > _size)
 				throw new IndexOutOfRangeException();
 			_position = designated;
 			var i = 0;
@@ -149,35 +130,26 @@ namespace Interay
 				*_buffer++ = value[i++];
 		}
 
-		/// <summary>
-		/// Writes a struct type to the buffer.
-		/// </summary>
+		/// <inheritdoc/>
 		public void WriteStruct<T>(ref T value) where T : struct
 		{
 			var designated = _position + Marshal.SizeOf<T>();
-			if (designated > Size)
+			if (designated > _size)
 				throw new IndexOutOfRangeException();
 			_position = designated;
 			Marshal.StructureToPtr(value, (IntPtr)_buffer, false);
+			_buffer += Marshal.SizeOf<T>();
 		}
 
-		/// <summary>
-		/// Gets a pointer to the buffer.
-		/// </summary>
-		public IntPtr GetPointer() => new IntPtr(_buffer - _position);
-
-		/// <summary>
-		/// Disposes all alocated resources.
-		/// </summary>
+		/// <inheritdoc/>
 		public void Dispose()
 		{
 			if (_disposed)
 			 	return;
-			_buffer -= _position;
+			_buffer = null;
+			_position = -1;
 			if (_allocated)
-				Marshal.FreeHGlobal((IntPtr)_buffer);
-			if(_handle.IsAllocated)
-				_handle.Free();
+				Marshal.FreeHGlobal(Pointer);
 			_disposed = true;
 		}
 		#endregion

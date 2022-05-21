@@ -9,7 +9,7 @@ namespace Interay.Transport
 	/// </summary>
 	public sealed class Enet : NetworkTransport
 	{
-		private const PacketFlags DefaultSendFlags = PacketFlags.NoAllocate | PacketFlags.Unsequenced;
+		private const PacketFlags DefaultSendFlags = PacketFlags.NoAllocate;
 
 		#region Fields
 		private Dictionary<uint, IntPtr> _peers;
@@ -154,9 +154,9 @@ namespace Interay.Transport
 					case EventType.Connect:
 						if (_clientPeer != IntPtr.Zero)
 							break;
+						LogInfo($"Client connected! Peer ID: {peerId}");
 						_peers.Add(peerId, networkEvent.Peer);
 						InvokeOnClientConnected(peerId);
-						LogInfo($"Client connected! Peer ID: {peerId}");
 						break;
 					case EventType.Disconnect:
 					case EventType.Timeout:
@@ -167,57 +167,60 @@ namespace Interay.Transport
 						InvokeOnClientDisconnected(peerId);
 						break;
 					case EventType.Receive:
-						using (var packet = new NetworkPacket(Native.GetPacketData(networkEvent.Packet), (int)Native.GetPacketSize(networkEvent.Packet)))
+						using (var packet = new EnetNetworkPacket(networkEvent))
 						{
 							try
 							{
 								InvokeOnPacketReceived(peerId, packet);
 							} catch { /* Just in case */ }
 						}
-						Native.DestroyPacket(networkEvent.Packet);
 						break;
 				}
 			}
 		}
 
 		/// <inheritdoc />
-		public override bool Send(NetworkPacket packet)
+		public override bool Send(INetworkPacket packet)
 		{
 			if(!_isRunning)
 				return false;
-			var error = false;
-			var enetPacket = Native.CreatePacket(packet.GetPointer(), packet.Size, DefaultSendFlags);
-			if(enetPacket == IntPtr.Zero)
-				return false;
-			if(_clientPeer == IntPtr.Zero)
+			if (packet is EnetNetworkPacket enetPacket)
 			{
-				Native.Broadcast(_host, 0, enetPacket);
+				if(enetPacket.Packet == IntPtr.Zero)
+					return false;
+				if(_clientPeer == IntPtr.Zero)
+				{
+					Native.Broadcast(_host, 0, enetPacket.Packet);
+					return true;
+				}
+				return Native.Send(_clientPeer, 0, enetPacket.Packet) == 0;
 			}
-			else
-			{
-				error = Native.Send(_clientPeer, 0, packet.GetPointer()) < 0;
-			}
-			Native.DestroyPacket(enetPacket);
-			return !error;
+			LogWarning("Packet is not an ENet packet! Sending failed");
+			return false;
 		}
 
 		/// <inheritdoc />
-		public override bool SendTo(ulong id, NetworkPacket packet)
+		public override bool SendTo(ulong id, INetworkPacket packet)
 		{
-			if(!_isRunning || _clientPeer != IntPtr.Zero)
+			if(!_isRunning ||_peers is null)
 				return false;
 			if(!_peers.ContainsKey((uint)id))
 			{
 				LogWarning($"Client with id {id} is not connected!");
 				return false;
 			}
-			var enetPacket = Native.CreatePacket(packet.GetPointer(), packet.Size, DefaultSendFlags);
-			if(enetPacket == IntPtr.Zero)
-				return false;
-			var error = Native.Send(_peers[(uint)id], 0, enetPacket) < 0;
-			Native.DestroyPacket(enetPacket);
-			return !error;
+			if (packet is EnetNetworkPacket enetPacket)
+			{
+				if(enetPacket.Packet == IntPtr.Zero)
+					return false;
+				return Native.Send(_peers[(uint)id], 0, enetPacket.Packet) == 0;
+			}
+			LogWarning("Packet is not an ENet packet! Sending failed");
+			return false;
 		}
+
+		/// <inheritdoc />
+		public override INetworkPacket CreatePacket(int size) => new EnetNetworkPacket(size, PacketFlags.NoAllocate);
 
 		/// <inheritdoc />
 		protected override void OnSettingsChanged(ref NetworkSettings newSettings, out bool valid)
@@ -239,15 +242,13 @@ namespace Interay.Transport
 		#endregion
 
 		#region Enums
-		internal enum PacketFlags 
+		internal enum PacketFlags  : uint
 		{
 			None = 0,
 			Reliable = 1,
 			Unsequenced = 2,
 			NoAllocate = 4,
 			UnreliableFragmented = 8,
-			Instant = 16,
-			Unthrottled = 32,
 			Sent =  256
 		}
 
@@ -364,7 +365,7 @@ namespace Interay.Transport
 
 			// ENetPacket* enet_packet_create(const void*,size_t,enet_uint32);
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_packet_create")]
-			internal static extern IntPtr CreatePacket(IntPtr data, int dataLength, PacketFlags flags);
+			internal static extern IntPtr CreatePacket(IntPtr data, IntPtr dataLength, PacketFlags flags);
 
 			// void enet_packet_destroy(ENetPacket *);
 			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_packet_destroy")]
@@ -379,7 +380,7 @@ namespace Interay.Transport
 			internal static extern uint GetPacketSize(IntPtr packet);
 
 			// int enet_address_set_host(ENetAddress * address, const char * hostName);
-			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_address_set_host_old")]
+			[DllImport(DllName, CallingConvention = Convention, EntryPoint = "enet_address_set_hostname")]
 			internal static extern int SetHost(ref ENetAddress address, string hostName);
 			#endregion
 		}

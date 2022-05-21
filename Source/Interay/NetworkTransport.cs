@@ -59,7 +59,7 @@ namespace Interay
 
 		#region Delegates
 		internal delegate void OnClientDelegate(ulong clientId);
-		internal delegate void OnMessageReceivedDelegate(ulong sender, NetworkPacket message);
+		internal delegate void OnMessageReceivedDelegate(ulong sender, INetworkPacket message);
 
 		#endregion
 
@@ -96,18 +96,25 @@ namespace Interay
 		/// <summary>
 		/// Sends message to all client.
 		/// </summary>
-		public abstract bool Send(NetworkPacket message);
+		public abstract bool Send(INetworkPacket message);
 
 		/// <summary>
 		/// Sends message to specific client.
 		/// </summary>
-		public abstract bool SendTo(ulong clientId, NetworkPacket message);
+		public abstract bool SendTo(ulong clientId, INetworkPacket message);
 
 		/// <summary>
 		/// Preforms transport layer update.
 		/// </summary>
 		/// <param name="deltaTime">Time since last tick</param>
 		public abstract void Tick(float deltaTime);
+
+		/// <summary>
+		/// Creates packet specific for this transport type
+		/// </summary>
+		/// <param name="size">Size of packet</param>
+		/// <returns>Newly created packet</returns>
+		public abstract INetworkPacket CreatePacket(int size);
 
 		/// <summary>
 		/// Called when setting validation is needed.
@@ -129,7 +136,7 @@ namespace Interay
 		/// <summary>
 		/// Invokes event <see cref="OnPacketReceived"/>.
 		/// </summary>
-		protected void InvokeOnPacketReceived(ulong sender, NetworkPacket message) => OnPacketReceived?.Invoke(sender, message);
+		protected void InvokeOnPacketReceived(ulong sender, INetworkPacket message) => OnPacketReceived?.Invoke(sender, message);
 		#endregion
 	}
 
