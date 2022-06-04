@@ -6,6 +6,7 @@ using FlaxEngine.GUI;
 #if FLAX_EDITOR
 using FlaxEditor;
 using FlaxEditor.CustomEditors;
+using FlaxEditor.CustomEditors.GUI;
 using FlaxEditor.CustomEditors.Editors;
 using FlaxEditor.CustomEditors.Elements;
 #endif
@@ -47,10 +48,12 @@ namespace Interay
 		internal static readonly NetworkLogDelegate LogFatal = (message) => LogFilter(LogType.Fatal, message);
 		private NetworkSettings _settings = NetworkSettings.Default;
 		private NetworkTransport _transport;
+		private NetworkSerializer _serializer;
 		private NetworkScript[] _instances;
 		private Stack<uint> _emptyInstances;
 		private float _tickTimeNow;
 		private uint _biggestNetworkID = 0;
+		private uint _biggestClientID = 0;
 		#endregion
 
 		#region Properties
@@ -69,24 +72,53 @@ namespace Interay
 			set 
 			{
 #if FLAX_EDITOR
-				if (!FlaxEditor.Editor.IsPlayMode)
+				if (!Editor.IsPlayMode)
 				{
 					_transport = value;
 					return;
 				}
 #endif
-				
-				if(_transport?.IsRunning ?? false)
+				if (IsRunning)
 					return;
 				if (_transport == value)
 					return;
-				if(!value.Initialize())
+				if (!value.Initialize())
 				{
 					Debug.LogError("Failed to initialize network transport layer.");
 					return;
 				}
 				_transport?.Dispose();
 				_transport = value;
+			}
+		}
+
+		/// <summary>
+		/// Networking serialization method.
+		/// </summary>
+		[EditorOrder(-975), Tooltip("Networking serialization method.")]
+		public NetworkSerializer Serializer
+		{
+			get => _serializer;
+			set 
+			{
+#if FLAX_EDITOR
+				if (!Editor.IsPlayMode)
+				{
+					_serializer = value;
+					return;
+				}
+#endif
+				if (IsRunning)
+					return;
+				if (_serializer == value)
+					return;
+				if (!value.Initialize())
+				{
+					Debug.LogError("Failed to initialize network serializer.");
+					return;
+				}
+				_serializer?.Dispose();
+				_serializer = value;
 			}
 		}
 
@@ -133,13 +165,13 @@ namespace Interay
 		public NetworkManager()
 		{
 #if FLAX_EDITOR
-			if(!FlaxEditor.Editor.IsPlayMode)
+			if(!Editor.IsPlayMode)
 				return;
 #endif
 			if (Singleton is null)
 			{
 				#if FLAX_EDITOR
-				FlaxEditor.Editor.Instance.StateMachine.PlayingState.SceneRestored += Dispose;
+				Editor.Instance.StateMachine.PlayingState.SceneRestored += Dispose;
 				#endif
 				Singleton = this;
 				return;
@@ -169,6 +201,18 @@ namespace Interay
 				LogError("Transport layer is not initialized or is disposed.");
 				return false;
 			}
+			if (isServer && Settings.MaxConnections == 0)
+			{
+				if (isClient)
+				{
+					LogError("If type is \"host\", then MaxConnections setting must be greater than 0.");
+					return false;
+				}
+				else
+				{
+					LogWarning("MaxConnections is 0. It means that server will not accept any connections.");
+				}
+			}
 			if (!isServer)
 			{
 				if (Hostname.Contains("localhost"))
@@ -191,7 +235,7 @@ namespace Interay
 			_biggestNetworkID = 0;
 			if (!_transport.Start(hostType, address.ToString(), Port))
 				return false;
-			LogInfo($"Started {(isServer ? "server" : "client")} on {address}:{Port}");
+			LogInfo($"Started {(isServer ? isClient ? "host" : "server" : "client")} on {address}:{Port}");
 			Scripting.FixedUpdate += FixedUpdate;
 			StartHostEvent?.Invoke(hostType);
 			for (int i = 0; i <= _biggestNetworkID; i++)
@@ -254,6 +298,7 @@ namespace Interay
 			}
 			_transport.OnPacketReceived -= OnPacketReceived;
 			_transport.OnClientConnected -= OnClientConnected;
+			_transport.OnClientDisconnected -= OnClientDisconnected;
 			_transport.Stop();
 			IsServer = false;
 			IsClient = false;
@@ -262,18 +307,27 @@ namespace Interay
 			_emptyInstances = null;
 		}
 
+		internal void Send(in NetworkMessage message)
+		{
+			if (!IsRunning)
+				return;
+
+		}
+
 		internal bool RegisterNetworkScript(NetworkScript instance, uint id = 0)
 		{
 			if (IsServer)
-				id = _biggestNetworkID + 1;
-			if (id >= _instances.Length)
 			{
-				var maxNetworkScripts = _transport.Settings.MaxNetworkScripts + 1;
+				id = _biggestNetworkID + 1;
 				if (_emptyInstances?.Count > 0)
 				{
 					id = _emptyInstances.Pop();
 				}
-				else if (id < maxNetworkScripts)
+			}
+			if (id >= _instances.Length)
+			{
+				var maxNetworkScripts = _transport.Settings.MaxNetworkScripts + 1;
+				if (id < maxNetworkScripts)
 				{
 					var newItems = new NetworkScript[Math.Min(_instances.Length + InitialArrayCapacity, maxNetworkScripts)];
 					Array.Copy(_instances, 0, newItems, 0, _instances.Length);
@@ -285,7 +339,7 @@ namespace Interay
 					return false;
 				}
 			}
-			if(IsServer)
+			if (IsServer)
 			{
 				if(_instances[id] is object)
 				{
@@ -302,10 +356,28 @@ namespace Interay
 
 		internal void UnregisterNetworkScript(uint id)
 		{
-			if(IsServer)
+			if (IsServer)
 			{
+				if (_instances[id] is null)
+					return;
 				_instances[id].Dispose();
 				_instances[id] = null;
+				_emptyInstances.Push(id);
+			}
+		}
+
+		internal void UnregisterAllNetworkScript()
+		{
+			if (IsServer)
+			{
+				foreach(var script in _instances)
+				{
+					if(script is null)
+						continue;
+					script.Dispose();
+				}
+				_emptyInstances.Clear();
+				_biggestNetworkID = 0;
 			}
 		}
 
@@ -313,6 +385,19 @@ namespace Interay
 		{
 			if(type >= Singleton?.LogLevel)
 				Debug.Logger.Log(type, "Network Manager", message);
+		}
+
+		/// <inheritdoc />
+		protected internal override void Dispose()
+		{
+			Singleton = null;
+			if (IsRunning)
+				Stop();
+			if (_transport?.IsInitialized ?? false)
+				_transport.Dispose();
+			#if FLAX_EDITOR
+			Editor.Instance.StateMachine.PlayingState.SceneRestored -= Dispose;
+			#endif
 		}
 		#endregion
 
@@ -345,35 +430,45 @@ namespace Interay
 			_tickTimeNow += Time.DeltaTime;
 		}
 
-		private void OnPacketReceived(ulong sender, NetworkPacket packet)
+		private void OnPacketReceived(ulong sender, INetworkPacket packet)
 		{
-			Debug.Log(packet.ReadByte()); // Packet type
-			Debug.Log(packet.ReadByte()); // Packet type
+			
 		}
 
 		private void OnClientConnected(ulong clientID)
 		{
-			if (IsServer)
+			for (int i = 0; i <= _biggestNetworkID; i++)
 			{
-				var bytes = new byte[] { 64, 128 };
-				using (var packet = new NetworkPacket(ref bytes))
+				var script = _instances[i];
+				if(script is null)
+					continue;
+				try
 				{
-					this._transport.SendTo(clientID, packet);
+					script.OnClientConnect(clientID);
+				}
+				catch (Exception exception)
+				{
+					Debug.LogException(exception, script);
 				}
 			}
 		}
 
-		/// <inheritdoc />
-		protected internal override void Dispose()
+		private void OnClientDisconnected(ulong clientID)
 		{
-			Singleton = null;
-			if (IsRunning)
-				Stop();
-			if (_transport?.IsInitialized ?? false)
-				_transport.Dispose();
-			#if FLAX_EDITOR
-			FlaxEditor.Editor.Instance.StateMachine.PlayingState.SceneRestored -= Dispose;
-			#endif
+			for (int i = 0; i <= _biggestNetworkID; i++)
+			{
+				var script = _instances[i];
+				if(script is null)
+					continue;
+				try
+				{
+					script.OnClientDisconnect(clientID);
+				}
+				catch (Exception exception)
+				{
+					Debug.LogException(exception, script);
+				}
+			}
 		}
 		#endregion
 	}
@@ -383,23 +478,40 @@ namespace Interay
 	[CustomEditor(typeof(NetworkManager))]
 	internal sealed class NetworkManagerEditor : GenericEditor
 	{
+		private LayoutElementsContainer _mainLayout;
 		private CustomElementsContainer<HorizontalPanel> _container;
-		private NetworkManager _manager;	
+		private NetworkManager _manager;
+		private NetworkSerializer _serializer;	
+		private TypePickerControl _serializerTypePicker;
 		public override void Initialize(LayoutElementsContainer layout)
 		{
+			layout.Control.Tag = "NetworkManager";
 			base.Initialize(layout);
 			layout.Space(20f);
+
+			_mainLayout = layout;
+			_manager = (NetworkManager)this.Values[0];
+			
+			if (!Editor.IsPlayMode)
+			{
+				if (_serializerTypePicker is object)
+				{
+					_serializerTypePicker.ValueChanged -= SerializerChanged;
+				}
+				_serializerTypePicker = (TypePickerControl)layout.ContainerControl.GetChild<PropertiesList>().Children.Find(x => (x.Tag as string) == "Serializer");
+				_serializerTypePicker.ValueChanged +=  SerializerChanged;
+				SerializerChanged();
+				return;
+			}
+			_manager.StartHostEvent += OnStartHost;
+			_manager.StopHostEvent += OnStopHost;
+
 			_container = layout.CustomContainer<HorizontalPanel>();
 			_container.Control.Height = 30f;
 			_container.Control.AnchorPreset = AnchorPresets.BottomCenter;
 			_container.Control.LocalX = 0f;
 			_container.CustomControl.Spacing = 10f;
-			if (!Editor.IsPlayMode)
-				return;
 
-			_manager = (NetworkManager)this.Values[0];
-			_manager.StartHostEvent += OnStartHost;
-			_manager.StopHostEvent += OnStopHost;
 			OnStopHost();
 		}
 
@@ -419,12 +531,27 @@ namespace Interay
 
 		protected override void Deinitialize()
 		{
-			if(_manager is object)
+			try
 			{
+				if (_serializerTypePicker is object)
+					_serializerTypePicker.ValueChanged -= SerializerChanged;
+				_serializer?.DisposeEditor();
+			}
+			catch (System.Exception exception)
+			{
+				Debug.LogException(exception);
+			}
+
+			_serializer = null;
+			_serializerTypePicker = null;
+			
+			if (_manager is object)
+			{
+				_manager.Serializer.DisposeEditor();
 				_manager.StartHostEvent -= OnStartHost;
 				_manager.StopHostEvent -= OnStopHost;
 			}
-			_container.CustomControl.DisposeChildren();
+			_container?.CustomControl.DisposeChildren();
 			base.Deinitialize();
 		}
 
@@ -433,20 +560,42 @@ namespace Interay
 			button.Height = 30f;
 			button.Clicked += () => { if (start) _manager.Start(hostType); else _manager.Stop(); };
 		}
+
+		private void SerializerChanged()
+		{
+			if (_serializerTypePicker.Value.Type is null && _serializerTypePicker.Value.IScriptType is null)
+				_manager.Serializer = null;
+			else
+				_manager.Serializer = (NetworkSerializer)_serializerTypePicker.Value.CreateInstance();
+
+			if (Editor.IsPlayMode || _manager.Serializer == _serializer)
+				return;
+			try
+			{
+				_serializer?.DisposeEditor();
+			}
+			catch (System.Exception exception)
+			{
+				Debug.LogException(exception);
+			}
+			_serializer = _manager.Serializer;
+
+			var error = false;
+			try
+			{
+				if (_serializer is null)
+					return;
+				error = !_serializer.InitializeEditor(_mainLayout);
+			}
+			catch (System.Exception exception)
+			{
+				Debug.LogException(exception);
+			}
+
+			if (error)
+				Debug.LogError("Failed to initialize network serializer editor.");
+		}
 	}
 	#endif
 	#endregion
-
-	/// <summary>
-	/// Host type of the network
-	/// </summary>
-	public enum HostType : byte
-	{
-		/// Server.
-		Server = 0b01,
-		/// Client.
-		Client = 0b10,
-		/// Server and Client.
-		Host = 0b11
-	}
 }

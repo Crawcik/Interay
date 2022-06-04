@@ -1,10 +1,4 @@
 using FlaxEngine;
-#if FLAX_EDITOR
-using FlaxEditor.Scripting;
-using FlaxEditor.CustomEditors;
-using FlaxEditor.CustomEditors.Editors;
-using FlaxEditor.CustomEditors.Elements;
-#endif
 
 namespace Interay
 {
@@ -142,40 +136,10 @@ namespace Interay
 
 	#region Editor
 	#if FLAX_EDITOR
-	/// <summary>
-	/// Implementation of the inspector used to edit reference to the <see cref="NetworkTransport"/> inheritors.
-	/// </summary>
 	[CustomEditor(typeof(NetworkTransport))]
-	internal sealed class NetworkTransportRefEditor : CustomEditor
-	{
-		private CustomElement<TypePickerControl> _element;
+	internal sealed class NetworkTransportRefEditor : NetworkRefEditor { }
 
-		/// <inheritdoc />
-		public override DisplayStyle Style => DisplayStyle.Inline;
-
-		/// <inheritdoc />
-		public override void Initialize(LayoutElementsContainer layout)
-		{
-			if (!HasDifferentTypes)
-			{
-				_element = layout.Custom<TypePickerControl>();
-				_element.CustomControl.Type = Values.Type.Type != typeof(object) || Values[0] == null ? Values.Type : TypeUtils.GetObjectType(Values[0]);
-				_element.CustomControl.ValueChanged += () => SetValue(_element.CustomControl.Value.CreateInstance());
-				_element.CustomControl.CheckValid += type => !type.IsAbstract;
-			}
-		}
-
-		/// <inheritdoc />
-		public override void Refresh()
-		{
-			base.Refresh();
-
-			if (!HasDifferentValues)
-			{
-				_element.CustomControl.Value = TypeUtils.GetObjectType(Values[0]);
-			}
-		}
-	}
+	
 	#endif
 	#endregion
 }
