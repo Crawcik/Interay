@@ -96,18 +96,6 @@ namespace Interay
 		}
 
 		/// <inheritdoc/>
-		public T ReadStruct<T>() where T : struct
-		{
-			var designated = _position + Marshal.SizeOf<T>();
-			if (designated > _size)
-				throw new IndexOutOfRangeException();
-			_position = designated;
-			var ret = Marshal.PtrToStructure<T>((IntPtr)_buffer);
-			_buffer += Marshal.SizeOf<T>();
-			return ret;
-		}
-
-		/// <inheritdoc/>
 		public void WriteByte(byte value)
 		{
 			if (_position++ >= _size)
@@ -119,7 +107,7 @@ namespace Interay
 		}
 
 		/// <inheritdoc/>
-		public void WriteBytes(ref byte[] value)
+		public void WriteBytes(byte[] value)
 		{
 			var designated = _position + value.Length;
 			if (designated > _size)
@@ -128,17 +116,6 @@ namespace Interay
 			var i = 0;
 			while (i < value.Length)
 				*_buffer++ = value[i++];
-		}
-
-		/// <inheritdoc/>
-		public void WriteStruct<T>(ref T value) where T : struct
-		{
-			var designated = _position + Marshal.SizeOf<T>();
-			if (designated > _size)
-				throw new IndexOutOfRangeException();
-			_position = designated;
-			Marshal.StructureToPtr(value, (IntPtr)_buffer, false);
-			_buffer += Marshal.SizeOf<T>();
 		}
 
 		/// <inheritdoc/>

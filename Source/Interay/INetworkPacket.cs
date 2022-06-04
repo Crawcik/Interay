@@ -19,32 +19,22 @@ namespace Interay
 		/// <summary>
 		/// Reads a value from the buffer.
 		/// </summary>
-		public byte ReadByte();
+		byte ReadByte();
 
 		/// <summary>
 		/// Reads a bytes from the buffer.
 		/// </summary>
-		public byte[] ReadBytes(int length);
-
-		/// <summary>
-		/// Reads a struct type from the buffer.
-		/// </summary>
-		public T ReadStruct<T>() where T : struct;
+		byte[] ReadBytes(int length);
 
 		/// <summary>
 		/// Writes a byte to the buffer.
 		/// </summary>
-		public void WriteByte(byte value);
+		void WriteByte(byte value);
 
 		/// <summary>
 		/// Writes a bytes to the buffer.
 		/// </summary>
-		public void WriteBytes(ref byte[] value);
-
-		/// <summary>
-		/// Writes a struct type to the buffer.
-		/// </summary>
-		public void WriteStruct<T>(ref T value) where T : struct;
+		void WriteBytes(byte[] value);
 		#endregion
 	}
 }
