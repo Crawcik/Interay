@@ -31,6 +31,11 @@ namespace Interay.Transport
 			_size = (int)Enet.Native.GetPacketSize(enetEvent.Packet);
 		}
 
+		~EnetNetworkPacket()
+		{
+			Dispose();
+		}
+
 		public byte ReadByte() 
 		{
 			if (_position++ >= _size)
@@ -86,8 +91,9 @@ namespace Interay.Transport
 			Enet.Native.DestroyPacket(Packet);
 			Marshal.FreeHGlobal(_bufferPointer);
 			_buffer = null;
-			_position = -1;
+			_position = _size;
 			_disposed = true;
+			GC.SuppressFinalize(true);
 		}
 	}
 }

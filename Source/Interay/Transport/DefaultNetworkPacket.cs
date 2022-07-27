@@ -124,10 +124,11 @@ namespace Interay
 			if (_disposed)
 			 	return;
 			_buffer = null;
-			_position = -1;
+			_position = _size;
 			if (_allocated)
 				Marshal.FreeHGlobal(Pointer);
 			_disposed = true;
+			GC.SuppressFinalize(this);
 		}
 		#endregion
 	}

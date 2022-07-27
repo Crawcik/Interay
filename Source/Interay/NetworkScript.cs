@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using FlaxEngine;
 
@@ -39,6 +40,7 @@ namespace Interay
 				_disposed = true;
 			}
 		}
+
 		/// <summary>
 		/// Called when hosts starts the server.
 		/// </summary>
@@ -57,12 +59,40 @@ namespace Interay
 		/// <summary>
 		/// Called when client connects to the server.
 		/// </summary>
-		public virtual void OnClientConnect(int connection) { }
+		public virtual void OnClientConnect(ulong connection) { }
 
 		/// <summary>
 		/// Called when client disconnects from the server.
 		/// </summary>
-		public virtual void OnClientDisconnect(int connection) { }
+		public virtual void OnClientDisconnect(ulong connection) { }
+
+		public void Send(Action function)
+		{
+			CheckTarget(function.Target);
+			NetworkManager.Singleton.Send(new NetworkMessage(this, function.Method));
+		}
+
+		public void Send(Action<ulong> function)
+		{
+			CheckTarget(function.Target);
+			NetworkManager.Singleton.Send(new NetworkMessage(this, function.Method));
+		}
+
+		public void Send<T>(Action<T> function, T data)
+		{
+			CheckTarget(function.Target);
+			if (data == null)
+				throw new ArgumentNullException("Sended data cannot be null" ,"data");
+			NetworkManager.Singleton.Send(new NetworkMessage(this, function.Method, data));
+		}
+
+		public void Send<T>(Action<ulong, T> function, T data)
+		{
+			CheckTarget(function.Target);
+			if (data == null)
+				throw new ArgumentNullException("Sended data cannot be null" ,"data");
+			NetworkManager.Singleton.Send(new NetworkMessage(this, function.Method, data));
+		}
 
 		/// <summary>
 		/// Destroys this instance.
@@ -71,6 +101,15 @@ namespace Interay
 		{
 			if(!_disposed)
 				Destroy(this);
+		}
+
+		private void CheckTarget(object target)
+		{
+			if (_networkID == 0)
+				if (!(this is NetworkManager))
+					throw new InvalidOperationException("This instance is not registered by the networking");
+			if (target != this)
+				throw new ArgumentException("Function that is outside of this instance can't be called.", "function");
 		}
 		#endregion
 	}

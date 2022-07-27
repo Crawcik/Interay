@@ -52,6 +52,7 @@ namespace Interay
 
 		/// <summary>
 		/// The maximum number of players that can connect.
+		/// If set to 0, no one will be able to connect.
 		/// </summary>
 		[EditorOrder(30), Tooltip("The maximum number of players that can connect.")]
 		public uint MaxConnections { get; set; }
