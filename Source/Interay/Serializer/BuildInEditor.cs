@@ -8,6 +8,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 using FlaxEditor.GUI;
+using FlaxEditor.Content;
 
 namespace Interay.Serializer
 {
@@ -56,16 +57,26 @@ namespace Interay.Serializer
 	internal class BuildInSerializerWindow : CustomEditorWindow
 	{
 		public const string CycleError = "Entity member '{0} field' of type '{1}' causes a cycle in the entity layout";
+
 		private readonly List<EntityEntry> _ownTypes = new List<EntityEntry>();
 		private Tabs _tabs;
 		private JsonAsset _jsonAsset;
+		private bool _initialized;
+
+		public static SerializeTypes Types { get; private set; }
+		private ProjectInfo _projectInfo => Editor.Instance.GameProject.References.FirstOrDefault(x => x.Project.Name == "Interay")?.Project ?? null;
+		private string _buildPath => (_projectInfo?.ProjectFolderPath ?? Globals.ProjectFolder) + "/Content/buildin.json";
 
 		public override void Initialize(LayoutElementsContainer layout)
 		{
+			if (_initialized)
+				return;
+			_initialized = true;
+			Types = new SerializeTypes();
 			var buttons = new KeyValuePair<string, Action>[] {
 				new KeyValuePair<string, Action>("Add", OnAdd),
-				new KeyValuePair<string, Action>("Remove", OnRemove),
-				new KeyValuePair<string, Action>("Build", OnSaveAll),
+				new KeyValuePair<string, Action>("Save", OnSave),
+				new KeyValuePair<string, Action>("Build", OnBuild),
 			};
 
 			var panel = new VerticalPanel {
@@ -101,11 +112,26 @@ namespace Interay.Serializer
                 TabsSize = new Vector2(100, 20),
                 Parent = panel
             };
+			
+			if (Editor.Instance.ContentDatabase.Find(_buildPath) is AssetItem assetItem)
+			{
+				var asset = (JsonAsset)Content.Load(assetItem.ID);
+				var dict = asset.CreateInstance<Dictionary<string, LineStruct[]>>();
+				foreach (var pair in dict)
+				{
+					var entity = new EntityEntry(this, pair.Key);
+					_ownTypes.Add(entity);
+					_tabs.AddTab(entity);
+					foreach (var line in pair.Value)
+						entity.AddLine().Set(line);
+				}
+			}
 		}
 
 		protected override void Deinitialize()
 		{
-			SerializeTypes.Game.Clear();
+			_initialized = false;
+			_ownTypes.Clear();
 			_tabs?.DisposeChildren();
 			_tabs?.Dispose();
 		}
@@ -124,6 +150,7 @@ namespace Interay.Serializer
 			var entity = new EntityEntry(this, text + lenght);
 			_ownTypes.Add(entity);
 			_tabs.AddTab(entity);
+			entity.AddLine().Init();
 		}
 
 		private void OnRemove(EntityEntry entry)
@@ -132,7 +159,7 @@ namespace Interay.Serializer
 			_tabs.RemoveChild(entry);
 		}
 
-		private void OnSaveAll()
+		private void OnSave()
 		{
 			var dict = new Dictionary<string, LineStruct[]>();
 			foreach (var item in _ownTypes)
@@ -143,14 +170,14 @@ namespace Interay.Serializer
 					.ToArray();
 				dict.Add(item.Name, lines);
 			}
-			foreach (var item in Editor.Instance.GameProject.References)
-			{
-				Debug.Log(item.Name);
-			}
-			var path = Editor.Instance.GameProject.References.FirstOrDefault(x => x.Project.Name == "Interay")?.Project.ProjectFolderPath ?? Globals.ProjectFolder;
-			if (Editor.SaveJsonAsset(path + "/Content/buildin.json", dict))
-				Debug.Log("Failed!");
+			if (Editor.SaveJsonAsset(_buildPath, dict))
+				Debug.LogError("Failed saving serializer JSON!");
 
+		}
+
+		private void OnBuild()
+		{
+			
 		}
 
 		private struct LineStruct
@@ -166,6 +193,7 @@ namespace Interay.Serializer
 			private readonly List<Line> _lines;
 			private VerticalPanel _container;
 			private TextBox _name;
+			private Line _spare;
 			
 			public string Name => _name.Text;
 			public IReadOnlyList<Line> Lines => _lines;
@@ -173,7 +201,7 @@ namespace Interay.Serializer
 			public EntityEntry(BuildInSerializerWindow window, string name) : base(name)
 			{
 				_lines = new List<Line>();
-				SerializeTypes.Game.Add(name);
+				BuildInSerializerWindow.Types.Game.Add(name);
 				_container = new VerticalPanel
 				{
 					Parent = this,
@@ -195,22 +223,19 @@ namespace Interay.Serializer
 				button.SetColors(Color.Crimson);
 				button.Width = 22f;
 				button.Clicked += () => {
+					_lines.ForEach(x => _container.RemoveChild(x.Container));
 					_lines.Clear();
 					window.OnRemove(this);
-					DisposeChildren();
-					Dispose();
 				};
 
 				line.AutoSize = false;
 				line.Height = 26f;
 				line.Spacing = 4;
 				spacer.Height = 20f;
-				var entry = new Line(_container.AddChild<HorizontalPanel>(), this);	
-				_lines.Add(entry);
-				entry.Init();
+				_spare = new Line(_container.AddChild<HorizontalPanel>(), this);
 			}
 
-			internal void CheckName(TextBoxBase textBox)
+			public void CheckName(TextBoxBase textBox)
 			{
 				var text = textBox.Text;
 				if (string.IsNullOrWhiteSpace(text))
@@ -222,7 +247,7 @@ namespace Interay.Serializer
 					textBox.Text = text + "_Copy";
 			}
 
-			internal void GenerateName(TextBoxBase textBox)
+			public void GenerateName(TextBoxBase textBox)
 			{
 				var lenght = _lines.Count - 1;
 				var text = "Field";
@@ -236,14 +261,18 @@ namespace Interay.Serializer
 				textBox.SetText(text + lenght);
 			}
 
-			internal void InitLine(Line line)
+			public Line AddLine()
 			{
-				_lines.Add(new Line(_container.AddChild<HorizontalPanel>(), this));
+				var line = _spare;
+				_spare = new Line(_container.AddChild<HorizontalPanel>(), this);
+				_lines.Add(line);
+				return line;
 			}
 
-			internal void RemoveLine(Line line)
+			public void RemoveLine(Line line)
 			{
 				_lines.Remove(line);
+				_container.RemoveChild(line.Container);
 			}
 		}
 
@@ -275,18 +304,16 @@ namespace Interay.Serializer
 				_button.ButtonClicked += btn => {
 					if (btn.Text == "+")
 					{
+						_entry.AddLine();
 						Init();
 						return;
 					}
-					Container.DisposeChildren();
-					Container.Dispose();
 					_entry.RemoveLine(this);
 				};
 			}
 
 			public void Init()
 			{
-				_entry.InitLine(this);
 				_button.Text = "X";
 				_button.SetColors(Color.Crimson);
 				_name  = Container.AddChild<TextBox>();
@@ -296,9 +323,18 @@ namespace Interay.Serializer
 				_name.Width = 120f;
 				_name.TextBoxEditEnd += _entry.CheckName;
 
-				_combo1.Items = SerializeTypes.Names;
+				_combo1.Items = BuildInSerializerWindow.Types.Names;
 				_combo1.SelectedIndexChanged += PrimaryDropdownChange;
 				_combo1.Width = 70f;
+			}
+
+			public void Set(LineStruct data)
+			{
+				Init();
+				_combo1.SelectedItem = data.Category;
+				_combo2.SelectedItem = data.Type;
+				_checkbox.Checked = data.IsArray;
+				_name.Text = data.Name;
 			}
 
 			private void PrimaryDropdownChange(ComboBox obj)
@@ -337,26 +373,26 @@ namespace Interay.Serializer
 				switch (key)
 				{
 					case "General":
-						return SerializeTypes.General;
+						return BuildInSerializerWindow.Types.General;
 					case "Flax":
-						return SerializeTypes.Flax;
+						return BuildInSerializerWindow.Types.Flax;
 					case "Game":
-						return SerializeTypes.Game;
+						return BuildInSerializerWindow.Types.Game;
 				}
 				return null;
 			}
 		}
 
-		private static class SerializeTypes
+		public class SerializeTypes
 		{
-			public static readonly List<string> Names = new List<string>()
+			public readonly List<string> Names = new List<string>()
 			{
 				"General",
 				"Flax",
 				"Game"
 			};
 
-			public static readonly List<string> General = new List<string>()
+			public readonly List<string> General = new List<string>()
 			{
 				"Bool", 
 				"Byte", "SByte",
@@ -367,14 +403,14 @@ namespace Interay.Serializer
 				"Char", "String"
 			};
 
-			public static readonly List<string> Flax = new List<string>()
+			public readonly List<string> Flax = new List<string>()
 			{
 				"Vector2", "Vector3", "Vector4",
 				"Quaternion", "Transform",
 				"Matrix2x2", "Matrix3x3", "Matrix"
 			};
 
-			public static readonly List<string> Game = new List<string>();
+			public readonly List<string> Game = new List<string>();
 		}
 
 	}
