@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Net;
 using FlaxEngine;
 using FlaxEngine.GUI;
+using System.Reflection;
+using System.Linq;
 #if FLAX_EDITOR
 using FlaxEditor;
 using FlaxEditor.CustomEditors;
@@ -50,6 +52,7 @@ namespace Interay
 		private NetworkTransport _transport;
 		private NetworkSerializer _serializer;
 		private NetworkScript[] _instances;
+		private Dictionary<int, MethodInfo> _networkFunctions;
 		private Stack<uint> _emptyInstances;
 		private float _tickTimeNow;
 		private uint _biggestNetworkID = 0;
@@ -174,7 +177,15 @@ namespace Interay
 				Editor.Instance.StateMachine.PlayingState.SceneRestored += Dispose;
 				#endif
 				Singleton = this;
-				return;
+
+				var methodList = new Dictionary<int, MethodInfo>();
+				var assemblies = AppDomain.CurrentDomain.GetAssemblies();
+				_networkFunctions = assemblies
+					.SelectMany(a => a.GetTypes())
+					.SelectMany(t => t.GetMethods())
+					.Distinct()
+                    .Where(m => m.GetCustomAttributes(typeof(NetworkMethodAttribute), false).Length > 0)
+					.ToDictionary(GetUniqueIdFromMethod);
 			}
 			LogWarning("Multiple instances of \"NetworkManager\" script found! Destroying additional instances.");
 			Destroy(this);
@@ -311,7 +322,37 @@ namespace Interay
 		{
 			if (!IsRunning)
 				return;
+			var methodId = GetUniqueIdFromMethod(message.Method);
+			var instanceId = message.Instance.NetworkID;
+			if (!_networkFunctions.ContainsKey(methodId))
+			{
+				LogError("Sending failed! Method has not been registered, check if it has \"NetworkFunction\" attribute and has unique name in class!");
+				return;
+			}
+			var packet = _transport.CreatePacket(_settings.MessageMaxSize);
+			var buffer = new byte[16];
+			buffer[0] = (byte)instanceId;
+			buffer[1] = (byte)(instanceId >> 8);
+			buffer[2] = (byte)(instanceId >> 16);
+			buffer[3] = (byte)(instanceId >> 24);
 
+			buffer[4] = (byte)methodId;
+			buffer[5] = (byte)(methodId >> 8);
+			buffer[6] = (byte)(methodId >> 16);
+			buffer[7] = (byte)(methodId >> 24);
+			packet.WriteBytes(buffer);
+
+			if (!_serializer.Serialize(packet, message.DataType, message.Data))
+			{
+				LogError("Sending failed! Current serializer can't handle this type of data");
+				return;
+			}
+			var result = message.TargetID is null
+				? _transport.Send(packet)
+				: _transport.SendTo(message.TargetID.Value, packet);
+			
+			if (!result)
+				LogError("Sending failed! Transport failed at sending data");
 		}
 
 		internal bool RegisterNetworkScript(NetworkScript instance, uint id = 0)
@@ -469,6 +510,17 @@ namespace Interay
 					Debug.LogException(exception, script);
 				}
 			}
+		}
+
+		private int GetUniqueIdFromMethod(MethodInfo method)
+		{
+			int id = 0;
+			unchecked 
+			{
+				foreach (var chr in method.Name)
+					id = 31 * id + chr;
+			}
+			return id;
 		}
 		#endregion
 	}

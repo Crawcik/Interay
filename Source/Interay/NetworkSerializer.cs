@@ -5,6 +5,7 @@ namespace Interay
 {
 	/// <summary>
 	/// The <see cref="NetworkSerializer"/> class is used to serialize data and deserialize packets.
+	/// </summary>
 	public abstract class NetworkSerializer : System.IDisposable
 	{
 		#region Properties
@@ -44,7 +45,7 @@ namespace Interay
 		/// <param name="data">Data to serialize</param>
 		/// <param name="type">Type of the data</param>
 		/// <returns>The packet to serialize data to.</returns>
-		public abstract INetworkPacket Serialize(object data, Type type);
+		public abstract bool Serialize(INetworkPacket packet, Type type, object data);
 
 		/// <summary>
 		/// Deserializes data from the packet.
@@ -52,7 +53,7 @@ namespace Interay
 		/// <param name="packet">The packet to deserialize data from.</param>
 		/// <param name="type">The type of the data to deserialize.</param>
 		/// <returns>Deserialized data.</returns>
-		public abstract NetworkMessage Deserialize(INetworkPacket packet, Type type);
+		public abstract bool Deserialize(INetworkPacket packet, Type type, out object data);
 
 		/// <summary>
 		/// Disposes all resources created by serializer.

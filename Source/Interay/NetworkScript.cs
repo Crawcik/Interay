@@ -69,13 +69,13 @@ namespace Interay
 		public void Send(Action function)
 		{
 			CheckTarget(function.Target);
-			NetworkManager.Singleton.Send(new NetworkMessage(this, function.Method));
+			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method));
 		}
 
 		public void Send(Action<ulong> function)
 		{
 			CheckTarget(function.Target);
-			NetworkManager.Singleton.Send(new NetworkMessage(this, function.Method));
+			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method));
 		}
 
 		public void Send<T>(Action<T> function, T data)
@@ -83,7 +83,7 @@ namespace Interay
 			CheckTarget(function.Target);
 			if (data == null)
 				throw new ArgumentNullException("Sended data cannot be null" ,"data");
-			NetworkManager.Singleton.Send(new NetworkMessage(this, function.Method, data));
+			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method, data));
 		}
 
 		public void Send<T>(Action<ulong, T> function, T data)
@@ -91,7 +91,7 @@ namespace Interay
 			CheckTarget(function.Target);
 			if (data == null)
 				throw new ArgumentNullException("Sended data cannot be null" ,"data");
-			NetworkManager.Singleton.Send(new NetworkMessage(this, function.Method, data));
+			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method, data));
 		}
 
 		/// <summary>
