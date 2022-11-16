@@ -37,9 +37,9 @@ namespace Interay.Serializer
 			if (isArray)
 				type = type.GetElementType();
 			var flag = Type.GetTypeCode(type);
+			packet.WriteByte((byte)((int)flag | (isArray ? 0x80 : 0)));
 			if (flag == TypeCode.DBNull || flag == TypeCode.Empty || flag == TypeCode.Object || (isArray && flag == TypeCode.String))
 				return false;
-			// packet.WriteByte((byte)((int)flag | (isArray ? 0x80 : 0))); // Not needed cause we check type on designated method
 
 			var func = GetWriteFunc(flag);
 			var typeSize = _typeSizes[(int)flag];
@@ -56,13 +56,13 @@ namespace Interay.Serializer
 					func(buffer, offset, array.GetValue(index));
 				}
 			}
+			else if (flag == TypeCode.String)
+			{
+				Utility.Write(packet, (string)data);
+				return true;
+			}
 			else
 			{
-				if (flag == TypeCode.String)
-				{
-					Utility.Write(packet, (string)data);
-					return true;
-				}
 				buffer = new byte[typeSize];
 				func(buffer, 0, data);
 			}
@@ -72,12 +72,12 @@ namespace Interay.Serializer
 		}
 
 		/// <inheritdoc/>
-		public override bool Deserialize(INetworkPacket packet, Type type, out object data)
+		public override bool Deserialize(INetworkPacket packet, out object data)
 		{
-			var isArray = type.IsArray;
-			if (isArray)
-				type = type.GetElementType();
-			var flag = Type.GetTypeCode(type);
+			var bit = packet.ReadByte();
+
+			var isArray = (bit & 0x80) == 0x80;
+			var flag = (TypeCode)(bit & 0xFE);
 			if (flag == TypeCode.DBNull || flag == TypeCode.Empty || flag == TypeCode.Object || (isArray && flag == TypeCode.String))
 			{
 				data = null;
