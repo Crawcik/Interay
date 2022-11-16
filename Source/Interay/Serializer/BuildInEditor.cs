@@ -405,9 +405,14 @@ namespace Interay.Serializer
 
 			public readonly List<string> Flax = new List<string>()
 			{
+#if FLAX_1_0 || FLAX_1_1 || FLAX_1_2 || FLAX_1_3
 				"Vector2", "Vector3", "Vector4",
+#else
+				"Float2", "Float3", "Float4",
+				"Double2", "Double3", "Double4",
+#endif
 				"Quaternion", "Transform",
-				"Matrix2x2", "Matrix3x3", "Matrix"
+				"Matrix", "Matrix2x2", "Matrix3x3"
 			};
 
 			public readonly List<string> Game = new List<string>();

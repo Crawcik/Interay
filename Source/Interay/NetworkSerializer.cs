@@ -53,7 +53,7 @@ namespace Interay
 		/// <param name="packet">The packet to deserialize data from.</param>
 		/// <param name="type">The type of the data to deserialize.</param>
 		/// <returns>Deserialized data.</returns>
-		public abstract bool Deserialize(INetworkPacket packet, Type type, out object data);
+		public abstract bool Deserialize(INetworkPacket packet, out object data);
 
 		/// <summary>
 		/// Disposes all resources created by serializer.
