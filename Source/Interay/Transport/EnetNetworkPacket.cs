@@ -1,10 +1,17 @@
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Interay.Transport
 {
 	internal unsafe class EnetNetworkPacket : INetworkPacket
 	{
+#if FAST_PACKET
+		public const MethodImplOptions FastIO = MethodImplOptions.AggressiveInlining;
+#else
+		public const MethodImplOptions FastIO = MethodImplOptions.NoInlining;
+#endif
+
 		/// <inheritdoc/>
 		public readonly IntPtr Packet;
 		private readonly IntPtr _bufferPointer;
@@ -14,13 +21,14 @@ namespace Interay.Transport
 		private bool _disposed = false;
 
 		public int Size => _size;
+		public int Positon => _position;
 
 		public EnetNetworkPacket(int size, Enet.PacketFlags flags)
 		{
-			_bufferPointer = Marshal.AllocHGlobal(size);
 			_size = size;
-			_buffer = (byte*)_bufferPointer;
 			Packet = Enet.Native.CreatePacket(_bufferPointer, (IntPtr)size, flags);
+			_bufferPointer = Enet.Native.GetPacketData(Packet);
+			_buffer = (byte*)_bufferPointer;
 		}
 
 		public EnetNetworkPacket(Enet.ENetEvent enetEvent)
@@ -36,23 +44,30 @@ namespace Interay.Transport
 			Dispose();
 		}
 
+		/// <inheritdoc/>
+		[MethodImpl(FastIO)]
 		public byte ReadByte() 
 		{
+#if !FAST_PACKET
 			if (_position++ >= _size)
 			{
 				_position--;
 				throw new IndexOutOfRangeException();
 			}
+#endif
 			return *_buffer++;
 		}
 
 		/// <inheritdoc/>
+		[MethodImpl(FastIO)]
 		public byte[] ReadBytes(int length) 
 		{
+#if !FAST_PACKET
 			var designated = _position + length;
 			if (designated > _size)
 				throw new IndexOutOfRangeException();
 			_position = designated;
+#endif
 			var bytes = new byte[length];
 			var i = 0;
 			while (i < length)
@@ -61,25 +76,36 @@ namespace Interay.Transport
 		}
 
 		/// <inheritdoc/>
+		[MethodImpl(FastIO)]
 		public void WriteByte(byte value)
 		{
+#if !FAST_PACKET
 			if (_position++ >= _size)
 			{
 				_position--;
 				throw new IndexOutOfRangeException();
 			}
+#endif
 			*_buffer++ = value;
 		}
 
 		/// <inheritdoc/>
-		public void WriteBytes(byte[] value)
+		[MethodImpl(FastIO)]
+		public void WriteBytes(byte[] value) => WriteBytes(value, 0, value.Length);
+
+		[MethodImpl(FastIO)]
+
+		public void WriteBytes(byte[] value, int offset, int lenght)
 		{
-			var designated = _position + value.Length;
+#if !FAST_PACKET
+			var designated = _position + lenght;
 			if (designated > _size)
 				throw new IndexOutOfRangeException();
 			_position = designated;
-			var i = 0;
-			while (i < value.Length)
+#endif
+			lenght += offset;
+			var i = offset;
+			while (i < lenght)
 				*_buffer++ = value[i++];
 		}
 
@@ -89,11 +115,9 @@ namespace Interay.Transport
 			if (_disposed)
 			 	return;
 			Enet.Native.DestroyPacket(Packet);
-			Marshal.FreeHGlobal(_bufferPointer);
 			_buffer = null;
 			_position = _size;
 			_disposed = true;
-			GC.SuppressFinalize(true);
 		}
 	}
 }
