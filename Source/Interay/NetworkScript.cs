@@ -10,7 +10,7 @@ namespace Interay
 	public class NetworkScript : Script
 	{
 		#region Fields
-		private ushort _networkID = 0;
+		private uint _networkID = 0;
 		private bool _disposed = false;
 		#endregion
 
@@ -23,7 +23,7 @@ namespace Interay
 		/// <summary>
 		/// The network ID of this instance.
 		/// </summary>
-		protected internal ushort NetworkID
+		protected internal uint NetworkID
 		{
 			get => _networkID;
 			set => _networkID = value;
@@ -69,13 +69,13 @@ namespace Interay
 		public void Send(Action function)
 		{
 			CheckTarget(function.Target);
-			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method));
+			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method, 1));
 		}
 
 		public void Send(Action<ulong> function)
 		{
 			CheckTarget(function.Target);
-			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method));
+			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method, 5));
 		}
 
 		public void Send<T>(Action<T> function, T data)
@@ -83,7 +83,11 @@ namespace Interay
 			CheckTarget(function.Target);
 			if (data == null)
 				throw new ArgumentNullException("Sended data cannot be null" ,"data");
-			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method, data));
+			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method, 3)
+			{
+				DataType = typeof(T),
+				Data = data
+			});
 		}
 
 		public void Send<T>(Action<ulong, T> function, T data)
@@ -91,7 +95,11 @@ namespace Interay
 			CheckTarget(function.Target);
 			if (data == null)
 				throw new ArgumentNullException("Sended data cannot be null" ,"data");
-			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method, data));
+			NetworkManager.Singleton.Send(new NetworkMessage(function.Target as NetworkScript, function.Method, 7)
+			{
+				DataType = typeof(T),
+				Data = data
+			});
 		}
 
 		/// <summary>
