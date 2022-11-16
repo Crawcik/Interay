@@ -9,7 +9,7 @@ namespace Interay.Transport
 	/// </summary>
 	public sealed class Enet : NetworkTransport
 	{
-		private const PacketFlags DefaultSendFlags = PacketFlags.NoAllocate;
+		private const PacketFlags DefaultSendFlags = PacketFlags.Reliable;
 
 		#region Fields
 		private Dictionary<uint, IntPtr> _peers;
@@ -147,7 +147,6 @@ namespace Interay.Transport
 				}
 				else if (result == 0)
 					return;
-
 				var peerId  = Native.GetPeerId(networkEvent.Peer);
 				switch (networkEvent.Type)
 				{
@@ -169,10 +168,7 @@ namespace Interay.Transport
 					case EventType.Receive:
 						using (var packet = new EnetNetworkPacket(networkEvent))
 						{
-							try
-							{
-								InvokeOnPacketReceived(peerId, packet);
-							} catch { /* Just in case */ }
+							InvokeOnPacketReceived(peerId, packet);
 						}
 						break;
 				}
@@ -188,6 +184,14 @@ namespace Interay.Transport
 			{
 				if(enetPacket.Packet == IntPtr.Zero)
 					return false;
+
+				/*unsafe
+				{
+					var pointer = (uint*)enetPacket.Packet;
+					pointer++;
+					*pointer = (uint)enetPacket.Positon;
+				}*/
+
 				if(_clientPeer == IntPtr.Zero)
 				{
 					Native.Broadcast(_host, 0, enetPacket.Packet);
@@ -220,7 +224,7 @@ namespace Interay.Transport
 		}
 
 		/// <inheritdoc />
-		public override INetworkPacket CreatePacket(int size) => new EnetNetworkPacket(size, PacketFlags.NoAllocate);
+		public override INetworkPacket CreatePacket(int size) => new EnetNetworkPacket(size, DefaultSendFlags);
 
 		/// <inheritdoc />
 		protected override void OnSettingsChanged(ref NetworkSettings newSettings, out bool valid)
@@ -279,6 +283,16 @@ namespace Interay.Transport
 			public byte ChannelID;
 			public uint Data;
 			public IntPtr Packet;
+		}
+
+		[StructLayout(LayoutKind.Sequential, Size = 11)]
+		internal struct ENetPacket
+		{
+			public uint Flags;
+			public uint DataLength;
+			IntPtr Data;
+			FreeCallback FreeCallback;
+			IntPtr UserData;
 		}
 
 		[StructLayout(LayoutKind.Sequential)]
