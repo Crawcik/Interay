@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Net;
 using FlaxEngine;
 using FlaxEngine.GUI;
+using System.Reflection;
+using System.Linq;
 #if FLAX_EDITOR
 using FlaxEditor;
 using FlaxEditor.CustomEditors;
@@ -21,6 +23,7 @@ namespace Interay
 	public class NetworkManager : NetworkScript
 	{
 		private const int InitialArrayCapacity = 50;
+		private const BindingFlags MethodBindings = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
 
 		#region Fields
 		/// <summary>
@@ -50,6 +53,7 @@ namespace Interay
 		private NetworkTransport _transport;
 		private NetworkSerializer _serializer;
 		private NetworkScript[] _instances;
+		private Dictionary<int, MethodInfo> _networkFunctions;
 		private Stack<uint> _emptyInstances;
 		private float _tickTimeNow;
 		private uint _biggestNetworkID = 0;
@@ -159,6 +163,7 @@ namespace Interay
 		/// </summary>
 		public event Action StopHostEvent;
 		#endregion
+
 		/// <summary>
 		/// Initializes a new instance of the <see cref="NetworkManager"/> class.
 		/// </summary>
@@ -174,6 +179,19 @@ namespace Interay
 				Editor.Instance.StateMachine.PlayingState.SceneRestored += Dispose;
 				#endif
 				Singleton = this;
+
+				var methodList = new Dictionary<int, MethodInfo>();
+				var assemblies = AppDomain.CurrentDomain.GetAssemblies()
+					.Where(x => x.GetReferencedAssemblies()
+					.Any(y => y.Name == "Interay.CSharp"))
+					.ToArray();
+				
+				_networkFunctions = assemblies
+					.SelectMany(a => a.GetTypes())
+					.SelectMany(t => t.GetMethods(MethodBindings))
+					.Distinct()
+                    .Where(m => m.GetCustomAttributes(typeof(NetworkMethodAttribute), false).Length > 0)
+					.ToDictionary(GetUniqueIdFromMethod);
 				return;
 			}
 			LogWarning("Multiple instances of \"NetworkManager\" script found! Destroying additional instances.");
@@ -311,18 +329,45 @@ namespace Interay
 		{
 			if (!IsRunning)
 				return;
+			var methodId = GetUniqueIdFromMethod(message.Method);
+			var instanceId = message.Instance.NetworkID;
+			if (!_networkFunctions.ContainsKey(methodId))
+			{
+				LogError("Sending failed! Method has not been registered, check if it has \"NetworkFunction\" attribute and has unique name in class!");
+				return;
+			}
 
+			var packet = _transport.CreatePacket(_settings.MessageMaxSize);
+			var buffer = new byte[9];
+			buffer[0] = message.MessageType;
+			buffer[1] = (byte)instanceId;
+			buffer[2] = (byte)(instanceId >> 8);
+			buffer[3] = (byte)(instanceId >> 16);
+			buffer[4] = (byte)(instanceId >> 24);
+
+			buffer[5] = (byte)methodId;
+			buffer[6] = (byte)(methodId >> 8);
+			buffer[7] = (byte)(methodId >> 16);
+			buffer[8] = (byte)(methodId >> 24);
+			packet.WriteBytes(buffer);
+
+			if (message.IsData)
+			{
+				if (!_serializer.Serialize(packet, message.DataType, message.Data))
+				{
+					LogError("Sending failed! Current serializer can't handle this type of data");
+					return;
+				}
+			}
+			if (!_transport.Send(packet))
+				LogError("Sending failed! Transport failed at sending data");
 		}
 
 		internal bool RegisterNetworkScript(NetworkScript instance, uint id = 0)
 		{
-			if (IsServer)
+			if (IsServer && id == 0)
 			{
-				id = _biggestNetworkID + 1;
-				if (_emptyInstances?.Count > 0)
-				{
-					id = _emptyInstances.Pop();
-				}
+				id = _emptyInstances?.Count > 0 ? _emptyInstances.Pop() : ++_biggestNetworkID;
 			}
 			if (id >= _instances.Length)
 			{
@@ -346,11 +391,11 @@ namespace Interay
 					LogError("Network script with id " + id + " already exists.");
 					return false;
 				}
-				_biggestNetworkID++;
 			}
 			else if(IsClient && !IsServer && _biggestNetworkID < id)
 				_biggestNetworkID = id;
 			_instances[id] = instance;
+			instance.NetworkID = id;
 			return true;
 		}
 
@@ -432,7 +477,29 @@ namespace Interay
 
 		private void OnPacketReceived(ulong sender, INetworkPacket packet)
 		{
-			
+			try
+			{
+				var buffer = packet.ReadBytes(9);
+				var messageType = buffer[0];
+				var instanceId = buffer[1] | buffer[2] << 8 | buffer[3] << 16 | buffer[4] << 24;
+				var methodId = buffer[5] | buffer[6] << 8 | buffer[7] << 16 | buffer[8] << 24;
+				var message = new NetworkMessage(_instances[instanceId], _networkFunctions[methodId], messageType);
+				message.TargetID = sender;
+
+				if (message.IsData)
+				{
+					if (!_serializer.Deserialize(packet, out message.Data))
+					{
+						LogError("Sending failed! Current serializer can't handle this type of data");
+						return;
+					}
+				}
+				message.Invoke();
+			}
+			catch (Exception exception)
+			{
+				LogWarning("Deserializing from client " + sender + " failed");
+			}
 		}
 
 		private void OnClientConnected(ulong clientID)
@@ -469,6 +536,17 @@ namespace Interay
 					Debug.LogException(exception, script);
 				}
 			}
+		}
+
+		private int GetUniqueIdFromMethod(MethodInfo method)
+		{
+			int id = 0;
+			unchecked 
+			{
+				foreach (var chr in method.Name)
+					id = 31 * id + chr;
+			}
+			return id;
 		}
 		#endregion
 	}
@@ -547,7 +625,7 @@ namespace Interay
 			
 			if (_manager is object)
 			{
-				_manager.Serializer.DisposeEditor();
+				_manager.Serializer?.DisposeEditor();
 				_manager.StartHostEvent -= OnStartHost;
 				_manager.StopHostEvent -= OnStopHost;
 			}

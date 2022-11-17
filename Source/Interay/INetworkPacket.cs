@@ -12,7 +12,7 @@ namespace Interay
 		/// <summary>
 		/// The size of the packet.
 		/// </summary>
-		public int Size { get; }
+		int Size { get; }
 		#endregion
 
 		#region Methods
@@ -35,6 +35,11 @@ namespace Interay
 		/// Writes a bytes to the buffer.
 		/// </summary>
 		void WriteBytes(byte[] value);
+
+		/// <summary>
+		/// Writes a bytes to the buffer.
+		/// </summary>
+		void WriteBytes(byte[] value, int offset, int lenght);
 		#endregion
 	}
 }

@@ -107,14 +107,18 @@ namespace Interay
 		}
 
 		/// <inheritdoc/>
-		public void WriteBytes(byte[] value)
+		public void WriteBytes(byte[] value) => WriteBytes(value, 0, value.Length);
+
+		/// <inheritdoc/>
+		public void WriteBytes(byte[] value, int offset, int lenght)
 		{
-			var designated = _position + value.Length;
+			var designated = _position + lenght;
 			if (designated > _size)
 				throw new IndexOutOfRangeException();
 			_position = designated;
-			var i = 0;
-			while (i < value.Length)
+			lenght += offset;
+			var i = offset;
+			while (i < lenght)
 				*_buffer++ = value[i++];
 		}
 
@@ -124,10 +128,11 @@ namespace Interay
 			if (_disposed)
 			 	return;
 			_buffer = null;
-			_position = -1;
+			_position = _size;
 			if (_allocated)
 				Marshal.FreeHGlobal(Pointer);
 			_disposed = true;
+			GC.SuppressFinalize(this);
 		}
 		#endregion
 	}
